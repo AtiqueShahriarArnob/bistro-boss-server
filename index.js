@@ -34,7 +34,7 @@ async function run() {
         const reviewsCollection = client.db('bistroDb').collection('reviews')
         const cartCollection = client.db('bistroDb').collection('cart')
         const paymentCollection = client.db('bistroDb').collection('payment')
-
+        const reservationCollection = client.db('bistroDb').collection('reservations');
         //jwt related api
         app.post('/jwt', async (req, res) => {
             const user = req.body;
@@ -256,6 +256,117 @@ async function run() {
             res.send({ paymentResult, deleteResult })
 
         })
+
+        //stats
+        app.get('/admin-stats', verifyToken, verifyAdmin, async (req, res) => {
+            const user = await userCollection.estimatedDocumentCount();
+            const menuItem = await menuCollection.estimatedDocumentCount();
+            const order = await paymentCollection.estimatedDocumentCount();
+
+            const result = await paymentCollection.aggregate([
+                {
+                    $group: {
+                        _id: null,
+                        totalRevenue: {
+                            $sum: '$price'
+                        }
+                    }
+                }
+            ]).toArray()
+
+            const revenue = result.length > 0 ? result[0].totalRevenue : 0;
+
+            res.send({
+                user,
+                menuItem,
+                order,
+                revenue
+            })
+        })
+
+        //pipeLine
+        app.get('/order-stats', verifyToken, verifyAdmin, async (req, res) => {
+            const result = await paymentCollection.aggregate([
+                {
+
+                    $unwind: '$menuItemId'
+                },
+                {
+                    $lookup: {
+                        from: 'menu',
+                        localField: 'menuItemId',
+                        foreignField: '_id',
+                        as: 'menuItems'
+                    }
+                },
+                {
+
+                    $unwind: '$menuItems'
+                },
+                {
+
+                    $group: {
+                        _id: '$menuItems.category',
+                        quantity: { $sum: 1 },
+                        revenue: { $sum: '$menuItems.price' }
+                    }
+                },
+                {
+
+                    $project: {
+                        _id: 0,
+                        category: '$_id',
+                        quantity: '$quantity',
+                        revenue: '$revenue'
+                    }
+                }
+            ]).toArray();
+
+            res.send(result);
+        });
+
+
+
+
+
+
+        app.post('/reservations', verifyToken, async (req, res) => {
+            const { name, phone, date, time, guests, notes } = req.body;
+            const email = req.decoded.email;
+
+            if (!name || !phone || !date || !time || !guests) {
+                return res.status(400).send({ error: 'Missing required fields' });
+            }
+
+            const reservation = {
+                name,
+                email,
+                phone,
+                date,
+                time,
+                guests,
+                notes: notes || '',
+                createdAt: new Date()
+            };
+
+            const result = await reservationCollection.insertOne(reservation);
+            res.send({ success: true, reservationId: result.insertedId });
+        });
+
+
+        app.get('/reservations', verifyToken, async (req, res) => {
+            const email = req.decoded.email;
+
+            const reservations = await reservationCollection
+                .find({ email })
+                .sort({ createdAt: -1 })
+                .toArray();
+
+            res.send(reservations);
+        });
+
+
+
 
 
 
